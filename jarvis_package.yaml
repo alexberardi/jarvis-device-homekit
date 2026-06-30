@@ -1,0 +1,51 @@
+schema_version: 1
+name: homekit
+display_name: Apple HomeKit (Local)
+description: >-
+  Control Apple HomeKit (HAP) accessories locally over your LAN — thermostats
+  (e.g. ecobee), switches/outlets, lights, and locks — with read-only sensors.
+  Pairs once with the accessory's 8-digit setup code; no cloud, account, or API
+  key. Routes through Jarvis's built-in device control.
+version: 0.1.0
+min_jarvis_version: "0.9.0"
+license: MIT
+
+author:
+  github: alexberardi
+
+categories:
+  - smart-home
+
+keywords:
+  - homekit
+  - hap
+  - ecobee
+  - thermostat
+  - lock
+  - light
+  - switch
+  - local
+  - smart-home
+
+platforms:
+  - linux
+  - darwin
+
+components:
+  - type: device_protocol
+    name: homekit
+    path: device_families/homekit/protocol.py
+    description: Apple HomeKit (HAP) local discovery, pairing, and control
+
+packages:
+  - name: aiohomekit
+    version: ">=3.1,<4"
+
+secrets:
+  - key: HOMEKIT_TEMP_UNIT
+    scope: integration
+    value_type: string
+    description: Temperature unit for thermostats (F or C)
+    required: false
+    is_sensitive: false
+    friendly_name: Temperature Unit
