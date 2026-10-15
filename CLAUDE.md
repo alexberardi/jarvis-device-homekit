@@ -81,7 +81,7 @@ $JDT deploy local .             # install onto the local node (or: deploy ssh pi
 
 ## Loop (agents)
 
-**Apple HomeKit (Local)**: Control Apple HomeKit (HAP) accessories locally over your LAN — thermostats (e.g. A Jarvis package (device_protocol) that nodes install through Pantry.
+**Apple HomeKit (Local)**: Control Apple HomeKit (HAP) accessories locally over your LAN: thermostats, switches, outlets, lights and locks, with read-only sensors. A Jarvis package (device_protocol) that nodes install through Pantry.
 
 **Verify** (what CI runs: `.github/workflows/ci.yml` calls the toolkit's reusable `package-ci.yml`):
 
