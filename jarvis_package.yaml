@@ -6,7 +6,7 @@ description: >-
   (e.g. ecobee), switches/outlets, lights, and locks — with read-only sensors.
   Pairs once with the accessory's 8-digit setup code; no cloud, account, or API
   key. Routes through Jarvis's built-in device control.
-version: 0.1.0
+version: "0.1.1"
 min_jarvis_version: "0.9.0"
 license: Apache-2.0
 
