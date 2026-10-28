@@ -88,8 +88,10 @@ LOCK_ACC = [
 
 
 class FakeHomekitClient:
-    def __init__(self, discover_result: list[dict] | None = None, accessories: list | None = None) -> None:
+    def __init__(self, discover_result: list[dict] | None = None, accessories: list | None = None,
+                 pair_error: Exception | None = None) -> None:
         self._discover = discover_result or []
+        self._pair_error = pair_error
         self._accessories = accessories or []
         self.writes: list[tuple[int, int, Any]] = []
         self.paired: dict | None = None
@@ -103,6 +105,8 @@ class FakeHomekitClient:
 
     async def pair(self, hap_id: str, alias: str, code: str) -> dict:
         # Single-shot pairing (the whole handshake in one call).
+        if self._pair_error is not None:
+            raise self._pair_error
         self.paired = {"hap": hap_id, "alias": alias, "code": code}
         return {"AccessoryPairingID": "AA:BB:CC", "secret": "ltsk"}
 
@@ -358,3 +362,70 @@ def test_get_state_real_handler_signature_detects_domain(backend: FakeBackend) -
 def client_control(client: FakeHomekitClient, action: str, data: dict) -> Any:
     """Helper: run a climate control action against the bedroom device."""
     return HomekitProtocol(client=client).control(_device(), action, data)
+
+
+# --------------------------------------------------------------------------- #
+# Already paired elsewhere (issue #3: "Pairing failed: step bytearray(b'\\x02')")
+# --------------------------------------------------------------------------- #
+# aiohomekit's errors, by name: pair_finish maps the class (its message is only the stage).
+class UnavailableError(Exception):
+    pass
+
+
+class AuthenticationError(Exception):
+    pass
+
+
+def _pair(proto: Any, device: DiscoveredDevice) -> Any:
+    start = asyncio.run(proto.control(device, "pair_start"))
+    return asyncio.run(proto.control(device, "pair_finish", {"session_id": start.input_required.session_id, "pin": "12345678"}))
+
+
+@pytest.fixture(autouse=True)
+def _forget_paired_elsewhere() -> None:
+    hk_mod._PAIRED_ELSEWHERE.clear()
+
+
+@pytest.mark.parametrize("error, says", [
+    (UnavailableError(bytearray(b"\x02")), "already paired with another home"),
+    (AuthenticationError("step 4"), "setup code didn't work"),
+    (RuntimeError("socket closed"), "Pairing failed (RuntimeError: socket closed)"),
+])
+def test_pair_finish_says_why(backend: FakeBackend, error: Exception, says: str) -> None:
+    result = _pair(HomekitProtocol(client=FakeHomekitClient(pair_error=error)), _device())
+    assert not result.success
+    assert says in result.error
+    assert "bytearray" not in result.error
+    assert backend.get("homekit_device", "pairing:bedroom") is None
+
+
+def test_paired_elsewhere_is_refused_before_asking_for_a_code(backend: FakeBackend) -> None:
+    hue = {"hap_id": "67:E4:76:B1:12:AA", "name": "Philips Hue HomeKit", "model": "BSB002", "category": 2, "paired": True}
+    proto = HomekitProtocol(client=FakeHomekitClient(discover_result=[hue]))
+    devices = asyncio.run(proto.discover())
+    assert devices[0].extra["paired_elsewhere"] is True
+    device = _device("switch", devices[0].entity_id, hue["hap_id"])
+
+    # The app shows the reason instead of a Pair button…
+    state = asyncio.run(proto.get_state(device=device))
+    assert "needs_pairing" not in state and "already paired with another home" in state["error"]
+    # …and pair_start (an old screen, a routine) refuses without prompting for a code.
+    result = asyncio.run(proto.control(device, "pair_start"))
+    assert not result.success and result.input_required is None
+    assert "already paired with another home" in result.error
+
+    # Removed from Apple Home: the next discovery brings Pair back.
+    proto._client._discover = [{**hue, "paired": False}]
+    asyncio.run(proto.discover())
+    assert asyncio.run(proto.get_state(device=device)) == {"needs_pairing": True, "state": "unpaired"}
+    assert asyncio.run(proto.control(device, "pair_start")).input_required is not None
+
+
+def test_paired_here_is_not_paired_elsewhere(backend: FakeBackend) -> None:
+    # Once Jarvis holds the pairing, the accessory advertises paired: that's us, not another home.
+    _seed_pairing(backend, "bedroom")
+    proto = HomekitProtocol(client=FakeHomekitClient(
+        discover_result=[{"hap_id": "AA:BB:CC", "name": "Bedroom", "model": "ecobee", "category": 9, "paired": True}],
+        accessories=THERMOSTAT_ACC))
+    asyncio.run(proto.discover())
+    assert "error" not in asyncio.run(proto.get_state(device=_device()))

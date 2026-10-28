@@ -71,7 +71,11 @@ $JDT deploy local .             # install onto the local node (or: deploy ssh pi
 ## Gotchas
 
 - **One controller per accessory (HAP).** If it's already in Apple Home, pairing
-  fails — remove it there first. Discovery exposes `extra.paired_elsewhere`.
+  fails: remove it there first. Discovery reads the status flag (`extra.paired_elsewhere`)
+  into the module-level `_PAIRED_ELSEWHERE` (by HAP id), because the node drops `extra`;
+  while it's set and we hold no pairing, `get_state` returns the reason as `error` (no Pair
+  button) and `pair_start` refuses. aiohomekit's pairing errors carry only the stage
+  ("step bytearray(b'\x02')"), so `pair_finish` maps the exception *class* to text (`_PAIR_ERRORS`).
 - **Temps are Celsius on the wire**; `characteristics.to_celsius/from_celsius`
   convert against the `HOMEKIT_TEMP_UNIT` secret (default F). Setpoints are
   clamped/rounded to the characteristic's `minValue/maxValue/minStep`.
