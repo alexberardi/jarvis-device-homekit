@@ -125,6 +125,8 @@ class HomekitProtocol(IJarvisDeviceProtocol):
 
     # Pairing sessions expire after 5 minutes (setup-code entry window).
     _PAIRING_SESSION_TTL: int = 300
+    # pair_start's look at an accessory not discovered since the node started.
+    _PAIR_CHECK_TIMEOUT: float = 3.0
 
     setup_guide: str = """## Pairing a HomeKit accessory
 
@@ -403,6 +405,10 @@ class HomekitProtocol(IJarvisDeviceProtocol):
                 False, entity_id, "pair_start",
                 error="No HomeKit accessory id for this device",
             )
+        if hap not in _PAIRED_ELSEWHERE:
+            # Not seen since the node started (discovery runs on an app scan): look now, so a
+            # code isn't asked for that can't work.
+            await self.discover(timeout=self._PAIR_CHECK_TIMEOUT)
         if _PAIRED_ELSEWHERE.get(hap) and not self._storage.get(f"pairing:{entity_id}"):
             return DeviceControlResult(False, entity_id, "pair_start", error=PAIRED_ELSEWHERE_MESSAGE)
         self._cleanup_expired_sessions()

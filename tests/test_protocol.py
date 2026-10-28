@@ -421,6 +421,14 @@ def test_paired_elsewhere_is_refused_before_asking_for_a_code(backend: FakeBacke
     assert asyncio.run(proto.control(device, "pair_start")).input_required is not None
 
 
+def test_pair_start_looks_first_when_not_discovered_yet(backend: FakeBackend) -> None:
+    # After a node restart nothing is known until an app scan; pair_start discovers itself.
+    hue = {"hap_id": "AA:BB:CC", "name": "Bedroom", "model": "BSB002", "category": 2, "paired": True}
+    result = asyncio.run(HomekitProtocol(client=FakeHomekitClient(discover_result=[hue])).control(_device(), "pair_start"))
+    assert not result.success and result.input_required is None
+    assert "already paired with another home" in result.error
+
+
 def test_paired_here_is_not_paired_elsewhere(backend: FakeBackend) -> None:
     # Once Jarvis holds the pairing, the accessory advertises paired: that's us, not another home.
     _seed_pairing(backend, "bedroom")
