@@ -57,6 +57,36 @@ except ImportError:
 logger = JarvisLogger(service="device.homekit")
 
 
+# HAP allows one controller: an accessory already in Apple Home (or another home) refuses
+# pair-setup. Discovery reads its status flag; keyed by HAP id (the node's cloud_id), shared by
+# every instance in the process, refreshed on each discovery.
+_PAIRED_ELSEWHERE: dict[str, bool] = {}
+
+PAIRED_ELSEWHERE_MESSAGE = (
+    "This accessory is already paired with another home (like Apple Home), and HomeKit allows "
+    "only one. Remove it there, or reset the accessory, then pair it here. For a Philips Hue "
+    "bridge, the Hue package controls it without HomeKit pairing."
+)
+
+# aiohomekit's pairing errors, by class name (protocol.py never imports aiohomekit): their
+# message is only the stage, e.g. "step bytearray(b'\\x02')".
+_PAIR_ERRORS: dict[str, str] = {
+    "UnavailableError": PAIRED_ELSEWHERE_MESSAGE,
+    "AlreadyPairedError": PAIRED_ELSEWHERE_MESSAGE,
+    "AuthenticationError": "That setup code didn't work. Check the 8-digit code on the accessory or its box and try again.",
+    "MalformedPinError": "That setup code didn't work. Check the 8-digit code on the accessory or its box and try again.",
+    "MaxTriesError": "Too many wrong setup codes. Restart the accessory, then try again.",
+    "BackoffError": "The accessory asked to wait before pairing again. Try again in a minute.",
+    "BusyError": "The accessory is pairing with something else right now. Try again in a minute.",
+    "MaxPeersError": "The accessory can't take another controller. Remove one in its app, then try again.",
+    "AccessoryNotFoundError": "Couldn't find the accessory on the network. Make sure it's powered on and on the same network.",
+}
+
+
+def _pair_error(e: Exception) -> str:
+    return _PAIR_ERRORS.get(type(e).__name__) or f"Pairing failed ({type(e).__name__}: {e})"
+
+
 def _slugify(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
 
@@ -95,6 +125,8 @@ class HomekitProtocol(IJarvisDeviceProtocol):
 
     # Pairing sessions expire after 5 minutes (setup-code entry window).
     _PAIRING_SESSION_TTL: int = 300
+    # pair_start's look at an accessory not discovered since the node started.
+    _PAIR_CHECK_TIMEOUT: float = 3.0
 
     setup_guide: str = """## Pairing a HomeKit accessory
 
@@ -170,6 +202,7 @@ class HomekitProtocol(IJarvisDeviceProtocol):
                 or "switch"
             )
             name: str = raw_name or f"HomeKit {domain.title()}"
+            _PAIRED_ELSEWHERE[hap] = bool(item.get("paired"))
             devices.append(
                 DiscoveredDevice(
                     entity_id=_slugify(name) or _slugify(hap),
@@ -372,6 +405,12 @@ class HomekitProtocol(IJarvisDeviceProtocol):
                 False, entity_id, "pair_start",
                 error="No HomeKit accessory id for this device",
             )
+        if hap not in _PAIRED_ELSEWHERE:
+            # Not seen since the node started (discovery runs on an app scan): look now, so a
+            # code isn't asked for that can't work.
+            await self.discover(timeout=self._PAIR_CHECK_TIMEOUT)
+        if _PAIRED_ELSEWHERE.get(hap) and not self._storage.get(f"pairing:{entity_id}"):
+            return DeviceControlResult(False, entity_id, "pair_start", error=PAIRED_ELSEWHERE_MESSAGE)
         self._cleanup_expired_sessions()
         session_id = str(uuid.uuid4())
         self._pairing_sessions[session_id] = {
@@ -411,9 +450,8 @@ class HomekitProtocol(IJarvisDeviceProtocol):
         except HomekitUnavailable as e:
             return DeviceControlResult(False, entity_id, "pair_finish", error=str(e))
         except Exception as e:
-            return DeviceControlResult(
-                False, entity_id, "pair_finish", error=f"Pairing failed: {e}",
-            )
+            logger.warning(f"HomeKit pairing failed for {entity_id}: {type(e).__name__}: {e}")
+            return DeviceControlResult(False, entity_id, "pair_finish", error=_pair_error(e))
 
         self._storage.save(f"pairing:{entity_id}", pairing_data)
         logger.info(f"HomeKit pairing complete for {entity_id}")
@@ -463,6 +501,10 @@ class HomekitProtocol(IJarvisDeviceProtocol):
 
         pairing_data = self._storage.get(f"pairing:{entity_id}") if entity_id else None
         if not pairing_data:
+            hap = str(getattr(device, "cloud_id", "") or kwargs.get("cloud_id", "") or "")
+            if _PAIRED_ELSEWHERE.get(hap):
+                # No Pair button: it can't succeed until the other home lets go.
+                return {"error": PAIRED_ELSEWHERE_MESSAGE}
             # Drives the mobile "Pair" affordance for an unpaired accessory.
             return {"needs_pairing": True, "state": "unpaired"}
 
